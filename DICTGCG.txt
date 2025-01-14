@@ -1,0 +1,158 @@
+# Eventus Security Data Lake Logger Configuration for on premises 
+
+module(
+  load="impstats"
+  interval="10"             # how often to generate stats
+  resetCounters="off"        # to get deltas (e.g. # of messages submitted in the last 10 seconds)
+  log.file="/tmp/stats"     # file to write those stats to
+  log.syslog="off"          # don't send stats through the normal processing pipeline. More on that in a bit
+)
+
+
+# /etc/rsyslog.conf configuration file for rsyslog
+#
+# For more information install rsyslog-doc and see
+# /usr/share/doc/rsyslog-doc/html/configuration/index.html
+#
+# Default logging rules can be found in /etc/rsyslog.d/50-default.conf
+
+#################
+#### MODULES ####
+#################
+
+module(load="imuxsock") # provides support for local system logging
+module(load="imudp")  # Allocate for imudp
+input(type="imudp" port="9002")
+
+module(load="imtcp" MaxSessions="2048")  # Allocate for imtcp
+input(type="imtcp" port="9001")
+
+module(load="imklog" permitnonkernelfacility="off") # provides kernel logging support and enables non-kernel klog messages
+module(load="omrelp" tls.tlslib="openssl")  # Load omrelp with OpenSSL TLS support
+
+$MainMsgQueueFileName disk-assisted
+$MaxMessageSize 64k
+$MainMsgQueueWorkerThreads 8
+
+###########################
+#### GLOBAL DIRECTIVES ####
+###########################
+
+$ActionFileDefaultTemplate RSYSLOG_TraditionalFileFormat
+$RepeatedMsgReduction on
+
+$FileOwner syslog
+$FileGroup adm
+$FileCreateMode 0640
+$DirCreateMode 0755
+$Umask 0022
+$PrivDropToUser syslog
+$PrivDropToGroup syslog
+
+$WorkDirectory /var/spool/rsyslog
+$IncludeConfig /etc/rsyslog.d/*.conf
+
+###############
+#### RULES ####
+###############
+
+#auth,authpriv.*                 /var/log/auth.log
+*.*;auth,authpriv.none          -/var/log/esdl.log
+daemon.*                        -/var/log/daemon.log
+kern.*                          -/var/log/kern.log
+lpr.*                           -/var/log/lpr.log
+mail.*                          -/var/log/mail.log
+#user.*                          -/var/log/user.log
+
+mail.info                       -/var/log/mail.info
+mail.warn                       -/var/log/mail.warn
+mail.err                        /var/log/mail.err
+
+*.=debug;\
+        auth,authpriv.none;\
+        mail.none               -/var/log/debug
+#*.=info;*.=notice;*.=warn;\
+  #      auth,authpriv.none;\
+    #    cron,daemon.none;\
+     #   mail.none               -/var/log/messages
+
+*.emerg                         :omusrmsg:*
+
+# Set gtls driver
+$DefaultNetstreamDriver gtls
+
+$template PaloAltoTemplate,"%msg% tenant=DICTGCG productName=PaloAlto productType=firewall logType=network\n"
+$template ErrorTemplate,"%msg% tenant=DICTGCG logType=error\n"
+$template NoTemplate,"%msg% tenant=DICTGCG logType=other\n"
+
+
+# Queue configuration
+$ActionQueueType LinkedList
+$ActionQueueFileName disk-assisted
+$ActionResumeRetryCount -1
+$ActionResumeInterval 1
+$ActionQueueSize 250000
+$ActionQueueMaxDiskSpace 10g
+$ActionQueueSyncQueueFiles on
+$ActionQueueDequeueBatchSize 4096
+$ActionQueueWorkerThreads 6  # Use the remaining 6 threads for queue processing and other tasks
+$ActionQueueWorkerThreadMinimumMessages 25000
+$ActionQueueSaveOnShutdown on
+$ActionQueueTimeoutEnqueue 10
+
+if $msg contains "016201044806" then {
+    action(
+        type="omrelp"
+        target="listener01.sg.eventussecurity.com"
+        port="20515"
+        timeout="5"
+        conn.timeout="3"
+        tls="on"
+        template="PaloAltoTemplate"
+        tls.cacert="/etc/ssl/rsyslog/CA.pem"
+        tls.mycert="/etc/ssl/rsyslog/client-cert.pem"
+        tls.myprivkey="/etc/ssl/rsyslog/client-key.pem"
+        tls.authmode="certvalid"
+        tls.permittedpeer="eventus"
+    )
+}
+
+else if $msg contains "www.rsyslog.com" then {
+    action(
+        type="omrelp"
+        target="listener01.sg.eventussecurity.com"
+        port="20515"
+        timeout="5"
+        conn.timeout="3"
+        tls="on"
+        template="ErrorTemplate"
+        tls.cacert="/etc/ssl/rsyslog/CA.pem"
+        tls.mycert="/etc/ssl/rsyslog/client-cert.pem"
+        tls.myprivkey="/etc/ssl/rsyslog/client-key.pem"
+        tls.authmode="certvalid"
+        tls.permittedpeer="eventus"
+    )
+}
+
+else {
+    action(
+        type="omrelp"
+        target="listener01.sg.eventussecurity.com"
+        port="20515"
+        timeout="5"
+        conn.timeout="3"
+        tls="on"
+        template="NoTemplate"
+        tls.cacert="/etc/ssl/rsyslog/CA.pem"
+        tls.mycert="/etc/ssl/rsyslog/client-cert.pem"
+        tls.myprivkey="/etc/ssl/rsyslog/client-key.pem"
+        tls.authmode="certvalid"
+        tls.permittedpeer="eventus"
+    )
+}
+
+# Completed our ESDL Logger Configuration
+
+#Enable debugging
+#$DebugFile /var/log/rsyslog-debug.log
+#$DebugLevel 2
