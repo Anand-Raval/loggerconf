@@ -1,0 +1,22 @@
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+   eth0:    # Change this to your network interface name
+     dhcp4: no
+     addresses: [172.16.190.57/24]    # Enter your desired static IP address and subnet mask
+     routes:
+        - to: 0.0.0.0/0
+          via: 192.16.1.1    # Enter your gateway IP address
+          on-link: true
+      nameservers:
+        addresses: [8.8.8.8, 8.8.4.4]    # DNS server IPs
+ 
+
+systemctl restart systemd-resolved
+
+
+Ping
+traceroute
+141.148.217.23
+
