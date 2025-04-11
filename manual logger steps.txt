@@ -1,0 +1,46 @@
+Manual logger : OS - ubuntu 22
+ 
+ 
+ 
+sudo apt update
+sudo apt install python3 
+sudo apt install rsyslog -y
+apt-get install rsyslog-relp
+ 
+sudo systemctl start rsyslog
+ 
+sudo apt-get install rsyslog-gnutls
+sudo apt-get install gnutls-bin
+ 
+ 
+sudo systemctl restart rsyslog
+ 
+#add all the files/certificates in the vm
+ 
+sudo apt-get install -y ca-certificates
+sudo update-ca-certificates
+chmod 644 CA.pem
+chmod 644 client-cert.pem
+chmod 644 client-key.pem
+ 
+cd /var/log
+nano newpurge.sh 
+(paste the script content) (get it from RnD)
+ctrl +s
+chmod +x newpurge.sh
+ 
+ 
+/etc/security/limit.conf
+ 
+*                soft    nofile          100000
+*                hard    nofile          100000
+root             soft    nofile          100000
+root             hard    nofile          100000
+ 
+ 
+crontab -e
+* * * * * sudo systemctl restart rsyslog
+0 0 * * * /var/log/newpurge.sh
+ 
+0 0 * * * sudo systemctl restart evenus-agent
+ 
