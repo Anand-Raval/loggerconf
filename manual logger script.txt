@@ -1,0 +1,272 @@
+#!/bin/bash
+# Automation Script for Manual Logger Installation on Ubuntu 22
+# Supports idempotence and a resume mode via:
+#    sudo ./automation_script.sh --resume <step_number>
+#
+# Step mapping:
+# 1 - System Update & Package Installations
+# 2 - Starting and Restarting Rsyslog
+# 3 - Certificate Setup
+# 4 - Modify System Limits
+# 5 - Setup Crontab Jobs
+# 6 - Create /var/log/size_logfile.txt File
+# 7 - Interactive Setup of newpurge.sh
+
+LOGFILE="/var/log/automation_setup.log"
+
+# Function for logging messages with timestamps
+log() {
+    echo "$(date +"%Y-%m-%d %H:%M:%S") - $1" | tee -a "$LOGFILE"
+}
+
+# Function for installing a package with error checking (apt-get is idempotent)
+install_package() {
+    log "Installing package: $1"
+    if apt-get install -y "$1"; then
+        log "✅ Successfully installed $1."
+    else
+        log "❌ Failed to install $1. Exiting."
+        exit 1
+    fi
+}
+
+# ----- Parse Resume Parameter (Optional) -----
+RESUME_STEP=0
+if [[ "$1" != "" ]]; then
+    if [[ "$1" == "--resume" ]]; then
+        if [[ -z "$2" ]]; then
+            echo "Usage: sudo $0 --resume <step_number>"
+            exit 1
+        fi
+        RESUME_STEP="$2"
+        if ! [[ "$RESUME_STEP" =~ ^[0-9]+$ ]]; then
+            echo "Invalid resume step. Please pass an integer as the step number."
+            exit 1
+        fi
+        log "Resuming from step $RESUME_STEP."
+    else
+        echo "Usage: sudo $0 [--resume <step_number>]"
+        exit 1
+    fi
+fi
+
+# ----- Step 0: Check for Root Privileges -----
+if [[ "$EUID" -ne 0 ]]; then
+    echo "❌ Please run this script as root or with sudo."
+    exit 1
+fi
+
+log "Starting automation script for manual logger installation on Ubuntu 22."
+
+########################################
+# Step 1: System Update & Package Installations
+########################################
+CURRENT_STEP=1
+if [[ $RESUME_STEP -gt $CURRENT_STEP ]]; then
+    log "Skipping Step $CURRENT_STEP (System Update & Package Installations) per resume option."
+else
+    log "Step $CURRENT_STEP: System Update & Package Installations"
+    log "Updating package lists..."
+    if ! apt-get update; then
+        log "❌ apt-get update failed. Exiting."
+        exit 1
+    fi
+
+    # Installing required packages (apt-get is idempotent)
+    install_package python3
+    install_package rsyslog
+    install_package rsyslog-relp
+    install_package rsyslog-gnutls
+    install_package gnutls-bin
+    install_package ca-certificates
+fi
+
+########################################
+# Step 2: Starting and Restarting Rsyslog
+########################################
+CURRENT_STEP=2
+if [[ $RESUME_STEP -gt $CURRENT_STEP ]]; then
+    log "Skipping Step $CURRENT_STEP (Starting and Restarting Rsyslog) per resume option."
+else
+    log "Step $CURRENT_STEP: Starting and Restarting Rsyslog"
+    log "Starting rsyslog service..."
+    if systemctl start rsyslog; then
+        log "✅ rsyslog started successfully."
+    else
+        log "❌ Failed to start rsyslog. Exiting."
+        exit 1
+    fi
+
+    log "Restarting rsyslog service..."
+    if systemctl restart rsyslog; then
+        log "✅ rsyslog restarted successfully."
+    else
+        log "❌ Failed to restart rsyslog. Exiting."
+        exit 1
+    fi
+fi
+
+########################################
+# Step 3: Certificate Setup
+########################################
+CURRENT_STEP=3
+if [[ $RESUME_STEP -gt $CURRENT_STEP ]]; then
+    log "Skipping Step $CURRENT_STEP (Certificate Setup) per resume option."
+else
+    log "Step $CURRENT_STEP: Certificate Setup"
+    # Ensure certificate files exist (adjust file paths as necessary)
+    CERT_FILES=("CA.pem" "client-cert.pem" "client-key.pem")
+    for cert in "${CERT_FILES[@]}"; do
+        if [[ ! -f "$cert" ]]; then
+            log "❌ Certificate file $cert not found. Please ensure it is present in the current directory."
+            exit 1
+        fi
+    done
+
+    log "Updating CA certificates..."
+    if update-ca-certificates; then
+        log "✅ CA certificates updated."
+    else
+        log "❌ Failed to update CA certificates. Exiting."
+        exit 1
+    fi
+
+    # Set the correct permissions on certificate files
+    for cert in "${CERT_FILES[@]}"; do
+        if chmod 644 "$cert"; then
+            log "Set permissions for $cert."
+        else
+            log "❌ Failed to set permissions for $cert. Exiting."
+            exit 1
+        fi
+    done
+fi
+
+########################################
+# Step 4: Modify System Limits
+########################################
+CURRENT_STEP=4
+if [[ $RESUME_STEP -gt $CURRENT_STEP ]]; then
+    log "Skipping Step $CURRENT_STEP (Modify System Limits) per resume option."
+else
+    log "Step $CURRENT_STEP: Modify System Limits"
+    LIMITS_FILE="/etc/security/limits.conf"
+    LIMITS_LINES=(
+"*                soft    nofile          100000"
+"*                hard    nofile          100000"
+"root             soft    nofile          100000"
+"root             hard    nofile          100000"
+    )
+
+    # Create a backup for safety
+    log "Creating backup of $LIMITS_FILE..."
+    cp "$LIMITS_FILE" "${LIMITS_FILE}.backup" && log "Backup created at ${LIMITS_FILE}.backup" || { log "❌ Could not create backup. Exiting."; exit 1; }
+
+    # Append each limit entry if it does not already exist
+    for line in "${LIMITS_LINES[@]}"; do
+        if grep -Fxq "$line" "$LIMITS_FILE"; then
+            log "ℹ️  Limit entry already exists: '$line'"
+        else
+            log "Appending limit entry: '$line'"
+            echo "$line" >> "$LIMITS_FILE" || { log "❌ Failed to append limits to $LIMITS_FILE. Exiting."; exit 1; }
+        fi
+    done
+fi
+
+########################################
+# Step 5: Setup Crontab Jobs
+########################################
+CURRENT_STEP=5
+if [[ $RESUME_STEP -gt $CURRENT_STEP ]]; then
+    log "Skipping Step $CURRENT_STEP (Setup Crontab Jobs) per resume option."
+else
+    log "Step $CURRENT_STEP: Setup Crontab Jobs"
+    # Retrieve current crontab lines (if any)
+    CRONTAB_TEMP=$(mktemp)
+    crontab -l > "$CRONTAB_TEMP" 2>/dev/null
+
+    # Define our crontab entries
+    CRON_ENTRIES=(
+"* * * * * sudo systemctl restart rsyslog"
+"0 0 * * * /var/log/newpurge.sh"
+"0 0 * * * sudo systemctl restart evenus-agent"
+    )
+
+    # Append the cron entries if not already present
+    for entry in "${CRON_ENTRIES[@]}"; do
+        if grep -Fq "$entry" "$CRONTAB_TEMP"; then
+            log "ℹ️  Crontab entry already exists: '$entry'"
+        else
+            log "Adding crontab entry: '$entry'"
+            echo "$entry" >> "$CRONTAB_TEMP"
+        fi
+    done
+
+    # Install the new crontab file
+    if crontab "$CRONTAB_TEMP"; then
+        log "✅ Crontab updated successfully."
+    else
+        log "❌ Failed to update crontab. Exiting."
+        rm "$CRONTAB_TEMP"
+        exit 1
+    fi
+    rm "$CRONTAB_TEMP"
+fi
+
+########################################
+# Step 6: Create /var/log/size_logfile.txt File
+########################################
+CURRENT_STEP=6
+if [[ $RESUME_STEP -gt $CURRENT_STEP ]]; then
+    log "Skipping Step $CURRENT_STEP (Create /var/log/size_logfile.txt File) per resume option."
+else
+    log "Step $CURRENT_STEP: Create /var/log/size_logfile.txt File"
+    if [ ! -f "/var/log/size_logfile.txt" ]; then
+        log "Creating file /var/log/size_logfile.txt"
+        if touch /var/log/size_logfile.txt; then
+            log "✅ File /var/log/size_logfile.txt created successfully."
+        else
+            log "❌ Failed to create file /var/log/size_logfile.txt. Exiting."
+            exit 1
+        fi
+    else
+        log "ℹ️ File /var/log/size_logfile.txt already exists."
+    fi
+fi
+
+########################################
+# Step 7: Interactive Setup of newpurge.sh (Final Step)
+########################################
+CURRENT_STEP=7
+if [[ $RESUME_STEP -gt $CURRENT_STEP ]]; then
+    log "Skipping Step $CURRENT_STEP (Interactive Setup of newpurge.sh) per resume option."
+else
+    log "Step $CURRENT_STEP: Interactive Setup of newpurge.sh"
+    echo ""
+    echo "***************************************************************"
+    echo "Interactive Step: Setup your newpurge.sh Script"
+    echo "***************************************************************"
+    echo "Please now open a terminal editor (nano) to create the file:"
+    echo "  nano /var/log/newpurge.sh"
+    echo "Paste your script content (from your prepared file or documentation),"
+    echo "save it, and exit the editor."
+    echo "Once you have completed this, press ENTER to continue."
+    read -rp "Press ENTER when done..."
+
+    # Verify that newpurge.sh exists; if not, warn the user.
+    if [[ ! -f "/var/log/newpurge.sh" ]]; then
+        log "❌ newpurge.sh was not found in /var/log. Please create the file and re-run the script."
+        exit 1
+    fi
+
+    # Set the executable permission on newpurge.sh
+    if chmod +x /var/log/newpurge.sh; then
+        log "✅ newpurge.sh is now executable."
+    else
+        log "❌ Failed to set executable permission on newpurge.sh. Exiting."
+        exit 1
+    fi
+fi
+
+log "Automation script completed successfully!"
+echo "All steps are now complete."
