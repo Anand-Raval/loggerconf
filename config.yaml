@@ -1,0 +1,29 @@
+name: FastForward
+loglevel: warn
+keep_alive_period: 10s
+
+listeners:
+  - name: TCP Listener
+    type: tcp
+    port: 9001
+    enabled: yes
+  - name: UDP Listener
+    type: udp
+    port: 9002
+    enabled: yes
+  - name: HTTP Listener
+    type: http
+    port: 8088
+    enabled: no
+
+sinks:
+  - name: Https forwarder
+    type: http
+    url: https://144.24.98.9:8088/ingest1
+    api_key: 5ad431fc10f44bf69b900b67f8097656
+    enabled: yes
+    batch_send: false
+  - name: Console print
+    type: stdout
+    enabled: no
+    batch_send: no
